@@ -1,0 +1,22 @@
+name: Verify
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run syntax and dry-run verification
+        run: ./verify.sh
+
+      - name: Run Debian 13 Trixie runtime container verification
+        run: ./verify.sh --runtime
