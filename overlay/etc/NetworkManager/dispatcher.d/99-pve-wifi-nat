@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="${1:-}"
+ACTION="${2:-}"
+
+if [[ "$IFACE" == vmbr* ]] || [[ "$IFACE" == "lo" ]]; then
+    exit 0
+fi
+
+case "$ACTION" in
+    up|dhcp4-change|connectivity-change)
+        exec /usr/local/bin/pve-wifi-nat.sh
+        ;;
+esac

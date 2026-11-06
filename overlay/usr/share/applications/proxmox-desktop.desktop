@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Proxmox VE Manager
+Comment=Manage Proxmox Virtual Environment Web Console
+Exec=xdg-open https://127.0.0.1:8006
+Terminal=false
+Type=Application
+Icon=utilities-system-monitor
+Categories=System;Emulator;X-Virtualization;
+StartupNotify=true
