@@ -102,8 +102,7 @@ tasksel tasksel/first multiselect standard, gnome-desktop, laptop
 d-i pkgsel/include string network-manager network-manager-gnome ifupdown2 iptables nftables dnsmasq-base xdg-utils wget ca-certificates gnupg
 d-i preseed/late_command string \\
     cp -r /cdrom/proxmox-laptop /target/root/proxmox-laptop && \\
-    in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root / && \\
-    in-target /bin/bash -c "apt-get update -y && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends proxmox-default-kernel proxmox-ve && systemctl enable pve-wifi-nat.service || true"
+    in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh
 EOF
 
     cat <<'EOF' > "${target_dir}/isolinux/gtk.cfg"

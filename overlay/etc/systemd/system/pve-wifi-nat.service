@@ -1,6 +1,7 @@
 [Unit]
 Description=Proxmox Laptop Wi-Fi NAT Bridge Masquerade
 After=network-online.target NetworkManager.service
+Before=pve-cluster.service pvedaemon.service pveproxy.service
 Wants=network-online.target
 
 [Service]

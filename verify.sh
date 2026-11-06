@@ -38,6 +38,10 @@ grep -Fq "/usr/local/bin/pve-wifi-nat.sh" "$DISPATCHER_HOOK" || \
 LOGIND_CONF="${SCRIPT_DIR}/overlay/etc/systemd/logind.conf.d/10-pve-laptop.conf"
 grep -Fq "HandleLidSwitch=ignore" "$LOGIND_CONF" || fail "HandleLidSwitch=ignore missing"
 
+SERVICE_FILE="${SCRIPT_DIR}/overlay/etc/systemd/system/pve-wifi-nat.service"
+grep -Fq "Before=pve-cluster.service pvedaemon.service pveproxy.service" "$SERVICE_FILE" || \
+    fail "pve-wifi-nat.service missing Before=pve-cluster.service ordering"
+
 NAT_SCRIPT="${SCRIPT_DIR}/overlay/usr/local/bin/pve-wifi-nat.sh"
 grep -Fq 'VMBR="vmbr1"' "$NAT_SCRIPT" || fail "vmbr1 missing in pve-wifi-nat.sh"
 grep -Fq 'BRIDGE_IP="10.99.0.1/24"' "$NAT_SCRIPT" || fail "10.99.0.1/24 missing in pve-wifi-nat.sh"
@@ -50,9 +54,22 @@ grep -Fq "https://127.0.0.1:8006" "$DESKTOP_FILE" || fail "Web GUI URL missing i
 ISO_DRY_OUT="$("${SCRIPT_DIR}/build-iso.sh" --dry-run)"
 echo "$ISO_DRY_OUT" | grep -Fq "$EXPECTED_REPO" || fail "build-iso.sh --dry-run did not output expected Trixie repo"
 
-SETUP_DRY_OUT="$("${SCRIPT_DIR}/setup-laptop.sh" --dry-run)"
+STAGE_TEST="$(mktemp -d)"
+trap 'rm -rf "$STAGE_TEST"' EXIT
+mkdir -p "${STAGE_TEST}/etc/apt"
+echo "deb cdrom:[Debian GNU/Linux 13.7.0 _Trixie_]/ trixie contrib main non-free-firmware" > "${STAGE_TEST}/etc/apt/sources.list"
+echo "debian" > "${STAGE_TEST}/etc/hostname"
+printf "127.0.0.1\tlocalhost\n127.0.1.1\tdebian.pve.laptop.local\tdebian\n" > "${STAGE_TEST}/etc/hosts"
+
+SETUP_DRY_OUT="$("${SCRIPT_DIR}/setup-laptop.sh" --dry-run --target-root "$STAGE_TEST")"
 echo "$SETUP_DRY_OUT" | grep -Fq "[dry-run] ip addr add 10.99.0.1/24 dev vmbr1" || \
     fail "setup-laptop.sh --dry-run did not verify vmbr1 NAT setup"
+grep -Fq "#deb cdrom:" "${STAGE_TEST}/etc/apt/sources.list" || \
+    fail "setup-laptop.sh did not comment out deb cdrom: in sources.list"
+grep -Fq "10.99.0.1	debian.pve.laptop.local	debian" "${STAGE_TEST}/etc/hosts" || \
+    fail "setup-laptop.sh did not rewrite 127.0.1.1 to 10.99.0.1 in /etc/hosts"
+grep -Fq "iface vmbr1 inet static" "${STAGE_TEST}/etc/network/interfaces" || \
+    fail "setup-laptop.sh did not configure vmbr1 in /etc/network/interfaces"
 
 ISO_FILE="${SCRIPT_DIR}/proxmox-gnome-laptop-9.2-amd64.hybrid.iso"
 if [[ -f "$ISO_FILE" ]]; then
@@ -67,7 +84,13 @@ if [[ "${1:-}" == "--runtime" ]]; then
         apt-get update -qq
         apt-get install -y -qq --no-install-recommends \
             wget ca-certificates gnupg desktop-file-utils iproute2 iputils-ping procps iptables nftables >/dev/null
+        echo "deb cdrom:[Debian GNU/Linux 13.7.0 _Trixie_ - Official amd64 NETINST]/ trixie main" >> /etc/apt/sources.list
+        echo "debian" > /etc/hostname
+        printf "127.0.0.1\tlocalhost\n127.0.1.1\tdebian.pve.laptop.local\tdebian\n" > /etc/hosts
         /repo/setup-laptop.sh --target-root /
+        ! grep -q "^deb cdrom:" /etc/apt/sources.list
+        grep -Fq "10.99.0.1" /etc/hosts
+        grep -Fq "iface vmbr1 inet static" /etc/network/interfaces
         test -x /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat
         desktop-file-validate /usr/share/applications/proxmox-desktop.desktop
         apt-get update -qq
