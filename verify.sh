@@ -165,7 +165,7 @@ for script in \
     bash -n "$script" || fail "Syntax error in $script"
 done
 
-python3 -m py_compile "${SCRIPT_DIR}/overlay/usr/local/bin/pve-laptop-tui" || \
+PYTHONDONTWRITEBYTECODE=1 python3 -B -m py_compile "${SCRIPT_DIR}/overlay/usr/local/bin/pve-laptop-tui" || \
     fail "Python syntax error in pve-laptop-tui"
 python3 -c "import json,sys; m=json.load(open(sys.argv[1])); assert m['uuid']=='proxmox-laptop@pve.local' and '48' in m['shell-version']" \
     "${SCRIPT_DIR}/overlay/usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/metadata.json" || \
