@@ -35,10 +35,17 @@ done
 OVERLAY_MANIFEST=(
     "0644:etc/NetworkManager/conf.d/10-proxmox-unmanaged.conf"
     "0755:etc/NetworkManager/dispatcher.d/99-pve-wifi-nat"
+    "0644:etc/dconf/profile/user"
+    "0644:etc/dconf/db/local.d/00-proxmox-laptop"
     "0644:etc/systemd/logind.conf.d/10-pve-laptop.conf"
     "0644:etc/systemd/system/pve-wifi-nat.service"
     "0755:usr/local/bin/pve-wifi-nat.sh"
+    "0755:usr/local/bin/pve-laptop-status"
+    "0755:usr/local/bin/pve-laptop-tui"
     "0644:usr/share/applications/proxmox-desktop.desktop"
+    "0644:usr/share/applications/proxmox-laptop-tui.desktop"
+    "0644:usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/metadata.json"
+    "0644:usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/extension.js"
 )
 
 LAPTOP_PACKAGES=(
@@ -146,7 +153,6 @@ if [[ "$DRY_RUN" == "1" ]]; then
     if [[ -z "$TARGET_ROOT" ]]; then
         trap 'rm -rf "$STAGE_ROOT"' EXIT
     fi
-    echo "deb cdrom:[Debian 13.7.0]/ trixie main" > "${STAGE_ROOT}/exchange_sources" || true
     mkdir -p "${STAGE_ROOT}/etc/apt"
     echo "deb cdrom:[Debian 13.7.0]/ trixie main" > "${STAGE_ROOT}/etc/apt/sources.list"
     echo "debian" > "${STAGE_ROOT}/etc/hostname"
@@ -192,5 +198,27 @@ if ! systemctl is-active --quiet NetworkManager; then
 else
     nmcli general reload 2>/dev/null || true
 fi
+
+if command -v dconf >/dev/null 2>&1; then
+    dconf update 2>/dev/null || true
+fi
+
+EXT_UUID="proxmox-laptop@pve.local"
+for bus_sock in /run/user/*/bus; do
+    [[ -S "$bus_sock" ]] || continue
+    user_uid="$(basename "$(dirname "$bus_sock")")"
+    user_name="$(id -nu "$user_uid" 2>/dev/null || true)"
+    [[ -n "$user_name" ]] || continue
+    cur_exts="$(sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_sock}" \
+        gsettings get org.gnome.shell enabled-extensions 2>/dev/null || true)"
+    if [[ "$cur_exts" == "@as []" ]]; then
+        sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_sock}" \
+            gsettings set org.gnome.shell enabled-extensions "['${EXT_UUID}']" 2>/dev/null || true
+    elif [[ -n "$cur_exts" && "$cur_exts" != *"$EXT_UUID"* ]]; then
+        new_exts="${cur_exts%]}, '${EXT_UUID}']"
+        sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_sock}" \
+            gsettings set org.gnome.shell enabled-extensions "$new_exts" 2>/dev/null || true
+    fi
+done
 
 echo "Proxmox VE ${PVE_VERSION} laptop profile is active."

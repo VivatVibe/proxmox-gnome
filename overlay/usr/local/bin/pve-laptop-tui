@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+import curses
+import json
+import os
+import subprocess
+import sys
+import time
+
+STATUS_BIN = os.environ.get("PVE_LAPTOP_STATUS_BIN", "/usr/local/bin/pve-laptop-status")
+NAT_BIN = os.environ.get("PVE_WIFI_NAT_BIN", "/usr/local/bin/pve-wifi-nat.sh")
+
+
+def run_priv(args):
+    prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+    res = subprocess.run(prefix + args, capture_output=True, text=True)
+    if res.returncode != 0 and os.geteuid() != 0:
+        res = subprocess.run(["pkexec"] + args, capture_output=True, text=True)
+    return res.returncode == 0, (res.stdout + res.stderr).strip()
+
+
+def get_status():
+    try:
+        out = subprocess.check_output([STATUS_BIN, "--json"], text=True, stderr=subprocess.DEVNULL)
+        return json.loads(out)
+    except Exception as exc:
+        return {
+            "iface": "unknown",
+            "ssid": "",
+            "lan_ip": "",
+            "lan_url": "",
+            "local_url": "https://127.0.0.1:8006",
+            "vmbr1_ip": "",
+            "pveproxy": "unknown",
+            "pve_cluster": "unknown",
+            "pve_wifi_nat": "unknown",
+            "nat_rule": "unknown",
+            "ip_forward": "0",
+            "vms_running": 0,
+            "cts_running": 0,
+            "load_avg": str(exc),
+            "mem_used_gb": 0.0,
+            "mem_total_gb": 0.0,
+            "mem_pct": 0,
+            "kernel": "",
+        }
+
+
+def get_guests():
+    guests = []
+    prefix = [] if os.geteuid() == 0 else ["sudo", "-n"]
+    for cmd, gtype in [(["qm", "list"], "VM"), (["pct", "list"], "CT")]:
+        try:
+            res = subprocess.run(prefix + cmd, capture_output=True, text=True, timeout=2)
+            if res.returncode == 0:
+                lines = [ln.strip() for ln in res.stdout.splitlines() if ln.strip()]
+                for ln in lines[1:]:
+                    parts = ln.split()
+                    if len(parts) >= 3:
+                        vmid = parts[0]
+                        status = parts[2] if gtype == "VM" else parts[1]
+                        name = parts[1] if gtype == "VM" else (parts[2] if len(parts) > 2 else f"ct-{vmid}")
+                        guests.append({"id": vmid, "type": gtype, "name": name, "status": status})
+        except Exception:
+            pass
+    return guests
+
+
+def print_once():
+    st = get_status()
+    guests = get_guests()
+    ssid_part = f" ({st['ssid']})" if st.get("ssid") else ""
+    print("=== Proxmox VE 9.2 Laptop Assistant ===")
+    print(f"Wi-Fi / LAN      : {st['iface'] or 'offline'}{ssid_part}")
+    print(f"Remote LAN URL   : {st['lan_url'] or 'offline'}")
+    print(f"Local Host URL   : {st['local_url']}")
+    print(f"VM NAT Bridge    : vmbr1 ({st['vmbr1_ip'] or 'missing'}) | NAT={st['nat_rule']} | ip_forward={st['ip_forward']}")
+    print(f"Services         : pveproxy={st['pveproxy']} | pve-cluster={st['pve_cluster']} | pve-wifi-nat={st['pve_wifi_nat']}")
+    print(f"Host Resources   : Load={st['load_avg']} | RAM={st['mem_used_gb']}/{st['mem_total_gb']} GiB ({st['mem_pct']}%) | Kernel={st['kernel']}")
+    print(f"Guests           : {len(guests)} configured (VMs running={st['vms_running']}, CTs running={st['cts_running']})")
+
+
+def draw_tui(stdscr):
+    curses.curs_set(0)
+    stdscr.nodelay(True)
+    stdscr.timeout(1000)
+    if curses.has_colors():
+        curses.start_color()
+        curses.use_default_colors()
+        curses.init_pair(1, curses.COLOR_GREEN, -1)
+        curses.init_pair(2, curses.COLOR_YELLOW, -1)
+        curses.init_pair(3, curses.COLOR_RED, -1)
+        curses.init_pair(4, curses.COLOR_CYAN, -1)
+
+    last_fetch = 0.0
+    st = {}
+    guests = []
+    flash_msg = "Ready. Press a shortcut key below."
+
+    while True:
+        now = time.time()
+        if now - last_fetch >= 2.0:
+            st = get_status()
+            guests = get_guests()
+            last_fetch = now
+
+        stdscr.erase()
+        max_y, max_x = stdscr.getmaxyx()
+
+        def put(y, x, text, attr=0):
+            if 0 <= y < max_y and 0 <= x < max_x:
+                stdscr.addstr(y, x, text[: max(0, max_x - x - 1)], attr)
+
+        c_title = curses.color_pair(4) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+        c_ok = curses.color_pair(1) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+        c_warn = curses.color_pair(2) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+        c_err = curses.color_pair(3) | curses.A_BOLD if curses.has_colors() else curses.A_BOLD
+
+        put(0, 2, "PROXMOX VE 9.2 LAPTOP ASSISTANT", c_title)
+        put(1, 2, "=" * min(68, max_x - 4))
+
+        ssid_part = f" ({st.get('ssid')})" if st.get("ssid") else ""
+        iface_str = f"{st.get('iface') or 'offline'}{ssid_part}"
+        lan_url = st.get("lan_url") or "Disconnected (connect Wi-Fi to get remote URL)"
+
+        put(3, 2, "NETWORK & ACCESS URLS", c_title)
+        put(4, 4, f"Active Wi-Fi / LAN : {iface_str}")
+        put(5, 4, "Remote Access URL  : ")
+        put(5, 25, lan_url, c_ok if st.get("lan_url") else c_warn)
+        put(6, 4, f"Local Host URL     : {st.get('local_url', 'https://127.0.0.1:8006')}")
+        put(7, 4, f"VM Bridge (vmbr1)  : {st.get('vmbr1_ip') or 'missing'}  [NAT: {st.get('nat_rule')} | ip_forward={st.get('ip_forward')}]")
+
+        put(9, 2, "SERVICES & HOST HEALTH", c_title)
+        for idx, (label, key) in enumerate([
+            ("pveproxy (Web UI :8006)", "pveproxy"),
+            ("pve-cluster (pmxcfs)   ", "pve_cluster"),
+            ("pve-wifi-nat (vmbr1)   ", "pve_wifi_nat"),
+        ]):
+            val = st.get(key, "unknown")
+            attr = c_ok if val == "active" else c_err
+            put(10 + idx, 4, f"{label} : ")
+            put(10 + idx, 30, val.upper(), attr)
+
+        put(13, 4, f"Host Resources          : Load {st.get('load_avg')} | RAM {st.get('mem_used_gb')}/{st.get('mem_total_gb')} GiB ({st.get('mem_pct')}%)")
+        put(14, 4, f"Kernel                  : {st.get('kernel')}")
+
+        put(16, 2, f"GUEST VMs & CONTAINERS (Running VMs: {st.get('vms_running', 0)}, CTs: {st.get('cts_running', 0)})", c_title)
+        if not guests:
+            put(17, 4, "No guests configured yet (create VMs/CTs on vmbr1 10.99.0.0/24 in Web UI).")
+            next_row = 19
+        else:
+            for i, g in enumerate(guests[:6]):
+                g_attr = c_ok if g["status"] == "running" else c_warn
+                put(17 + i, 4, f"[{g['type']} {g['id']}] {g['name']:<24} ")
+                put(17 + i, 38, g["status"].upper(), g_attr)
+            next_row = 18 + min(len(guests), 6)
+
+        put(next_row, 2, "ACTIONS", c_title)
+        put(next_row + 1, 4, "[r] Reset Wi-Fi NAT (pve-wifi-nat)   [s] Restart PVE Web UI & Cluster")
+        put(next_row + 2, 4, "[o] Open Web UI in Browser           [f] Force Refresh")
+        put(next_row + 3, 4, "[q] Quit")
+        put(next_row + 5, 2, f"Status: {flash_msg}", c_warn if "Running" in flash_msg else 0)
+
+        stdscr.refresh()
+        ch = stdscr.getch()
+        if ch in (ord("q"), ord("Q"), 27):
+            break
+        elif ch in (ord("f"), ord("F")):
+            last_fetch = 0.0
+            flash_msg = "Refreshed status."
+        elif ch in (ord("r"), ord("R")):
+            flash_msg = "Running pve-wifi-nat.sh to reconcile vmbr1 and NAT rules..."
+            stdscr.refresh()
+            ok, out = run_priv([NAT_BIN])
+            last_fetch = 0.0
+            flash_msg = "Wi-Fi NAT reconciled and active." if ok else f"NAT reset failed ({out[:40]})"
+        elif ch in (ord("s"), ord("S")):
+            flash_msg = "Restarting pve-cluster and pveproxy..."
+            stdscr.refresh()
+            ok, out = run_priv(["systemctl", "restart", "pve-cluster.service", "pveproxy.service", "pvedaemon.service"])
+            last_fetch = 0.0
+            flash_msg = "Proxmox services restarted." if ok else f"Service restart failed ({out[:40]})"
+        elif ch in (ord("o"), ord("O")):
+            target = st.get("lan_url") or st.get("local_url") or "https://127.0.0.1:8006"
+            subprocess.Popen(["xdg-open", target], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            flash_msg = f"Opened {target} in browser."
+
+
+def main():
+    if "--once" in sys.argv:
+        print_once()
+        return
+    curses.wrapper(draw_tui)
+
+
+if __name__ == "__main__":
+    main()

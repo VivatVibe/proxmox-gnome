@@ -8,6 +8,7 @@ SUBNET="10.99.0.0/24"
 BRIDGE_IP="10.99.0.1/24"
 DRY_RUN="${DRY_RUN:-0}"
 LOCK_FILE="${LOCK_FILE:-/run/pve-wifi-nat.lock}"
+STATE_FILE="${STATE_FILE:-/run/pve-wifi-nat.state}"
 INTERFACES_FILE="${INTERFACES_FILE:-/etc/network/interfaces}"
 
 if [[ "${1:-}" == "--dry-run" ]]; then
@@ -84,4 +85,48 @@ if [[ -n "$OUT_IFACE" ]] && [[ "$OUT_IFACE" != "$VMBR" ]]; then
         nft add rule ip pve_wifi_nat forward iifname "$VMBR" oifname "$OUT_IFACE" accept
         nft add rule ip pve_wifi_nat forward iifname "$OUT_IFACE" oifname "$VMBR" ct state related,established accept
     fi
+fi
+
+OUT_IP=""
+NAT_RULE="missing"
+if [[ -n "$OUT_IFACE" ]]; then
+    OUT_IP=$(ip -4 -o addr show dev "$OUT_IFACE" 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}' || true)
+    if [[ "$OUT_IFACE" != "$VMBR" ]]; then
+        NAT_RULE="active"
+    fi
+fi
+PREV_IP=""
+if [[ -f "$STATE_FILE" ]]; then
+    PREV_IP=$(awk -F= '/^OUT_IP=/{print $2; exit}' "$STATE_FILE" 2>/dev/null || true)
+fi
+if [[ -w "$(dirname "$STATE_FILE")" ]]; then
+    cat <<EOF > "${STATE_FILE}.tmp"
+OUT_IFACE=${OUT_IFACE:-}
+OUT_IP=${OUT_IP:-}
+LAN_URL=${OUT_IP:+https://${OUT_IP}:8006}
+LOCAL_URL=https://127.0.0.1:8006
+VMBR_IP=${BRIDGE_IP%/*}
+NAT_RULE=${NAT_RULE}
+UPDATED_AT=$(date +%s)
+EOF
+    mv -f "${STATE_FILE}.tmp" "$STATE_FILE"
+fi
+
+if [[ -n "$OUT_IP" && "$OUT_IP" != "$PREV_IP" ]] && command -v gdbus >/dev/null 2>&1; then
+    for bus_sock in /run/user/*/bus; do
+        [[ -S "$bus_sock" ]] || continue
+        uid_dir="$(dirname "$bus_sock")"
+        uid_num="$(basename "$uid_dir")"
+        user_name="$(id -nu "$uid_num" 2>/dev/null || true)"
+        [[ -n "$user_name" ]] || continue
+        sudo -u "$user_name" DBUS_SESSION_BUS_ADDRESS="unix:path=${bus_sock}" \
+            gdbus call --session \
+            --dest org.freedesktop.Notifications \
+            --object-path /org/freedesktop/Notifications \
+            --method org.freedesktop.Notifications.Notify \
+            "Proxmox Laptop Assistant" 0 "network-server-symbolic" \
+            "Proxmox VE LAN Address (${OUT_IFACE})" \
+            "Access from other devices via https://${OUT_IP}:8006" \
+            "[]" "{}" 5000 >/dev/null 2>&1 || true
+    done
 fi

@@ -1,0 +1,3 @@
+[org/gnome/shell]
+disable-user-extensions=false
+enabled-extensions=['proxmox-laptop@pve.local']

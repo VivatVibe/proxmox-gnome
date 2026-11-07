@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
+MODE="${1:-text}"
+
+OUT_IFACE=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)!="vmbr1"){print $(i+1); exit}}' || true)
+if [[ -z "$OUT_IFACE" ]]; then
+    OUT_IFACE=$(ip -4 -br addr show 2>/dev/null | awk '$1 !~ /^(lo|vmbr)/ && $2 == "UP" {print $1; exit}' || true)
+fi
+
+LAN_IP=""
+if [[ -n "$OUT_IFACE" ]]; then
+    LAN_IP=$(ip -4 -o addr show dev "$OUT_IFACE" 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}' || true)
+fi
+
+SSID=""
+if [[ -n "$OUT_IFACE" ]] && command -v nmcli >/dev/null 2>&1; then
+    SSID=$(nmcli -g GENERAL.CONNECTION device show "$OUT_IFACE" 2>/dev/null | head -n1 || true)
+fi
+
+LAN_URL=""
+if [[ -n "$LAN_IP" ]]; then
+    LAN_URL="https://${LAN_IP}:8006"
+fi
+LOCAL_URL="https://127.0.0.1:8006"
+
+VMBR1_IP=$(ip -4 -o addr show dev vmbr1 2>/dev/null | awk '{print $4; exit}' || true)
+PVEPROXY_STATE=$(systemctl is-active pveproxy.service 2>/dev/null || true)
+PVEPROXY_STATE="${PVEPROXY_STATE:-inactive}"
+PVE_CLUSTER_STATE=$(systemctl is-active pve-cluster.service 2>/dev/null || true)
+PVE_CLUSTER_STATE="${PVE_CLUSTER_STATE:-inactive}"
+PVE_WIFI_NAT_STATE=$(systemctl is-active pve-wifi-nat.service 2>/dev/null || true)
+PVE_WIFI_NAT_STATE="${PVE_WIFI_NAT_STATE:-inactive}"
+IP_FORWARD=$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo "0")
+
+NAT_RULE="missing"
+if [[ -f /run/pve-wifi-nat.state ]]; then
+    NAT_RULE=$(awk -F= '/^NAT_RULE=/{print $2; exit}' /run/pve-wifi-nat.state 2>/dev/null || echo "missing")
+fi
+
+VMS_RUNNING=$(ps -eo args 2>/dev/null | awk '/\/usr\/bin\/kvm -id [0-9]+/{c++} END{print c+0}')
+CTS_RUNNING=$(ps -eo args 2>/dev/null | awk '/lxc-start.*-n [0-9]+/{c++} END{print c+0}')
+
+LOAD_AVG=$(awk '{print $1 " " $2 " " $3}' /proc/loadavg 2>/dev/null || echo "0.00 0.00 0.00")
+read -r MEM_USED_GB MEM_TOTAL_GB MEM_PCT < <(awk '
+    /^MemTotal:/ {total=$2}
+    /^MemAvailable:/ {avail=$2}
+    END {
+        used = total - avail
+        pct = (total > 0) ? int((used * 100) / total) : 0
+        printf "%.1f %.1f %d\n", used/1048576, total/1048576, pct
+    }
+' /proc/meminfo)
+KERNEL_VER=$(uname -r)
+
+if [[ "$MODE" == "--json" ]]; then
+    python3 - "$OUT_IFACE" "$SSID" "$LAN_IP" "$LAN_URL" "$LOCAL_URL" "$VMBR1_IP" \
+        "$PVEPROXY_STATE" "$PVE_CLUSTER_STATE" "$PVE_WIFI_NAT_STATE" "$NAT_RULE" \
+        "$IP_FORWARD" "$VMS_RUNNING" "$CTS_RUNNING" "$LOAD_AVG" \
+        "$MEM_USED_GB" "$MEM_TOTAL_GB" "$MEM_PCT" "$KERNEL_VER" <<'PY'
+import json, sys
+
+(
+    iface, ssid, lan_ip, lan_url, local_url, vmbr1_ip,
+    pveproxy, pve_cluster, pve_wifi_nat, nat_rule,
+    ip_forward, vms_running, cts_running, load_avg,
+    mem_used_gb, mem_total_gb, mem_pct, kernel
+) = sys.argv[1:]
+
+print(json.dumps({
+    "iface": iface,
+    "ssid": ssid,
+    "lan_ip": lan_ip,
+    "lan_url": lan_url,
+    "local_url": local_url,
+    "vmbr1_ip": vmbr1_ip,
+    "pveproxy": pveproxy,
+    "pve_cluster": pve_cluster,
+    "pve_wifi_nat": pve_wifi_nat,
+    "nat_rule": nat_rule,
+    "ip_forward": ip_forward,
+    "vms_running": int(vms_running),
+    "cts_running": int(cts_running),
+    "load_avg": load_avg,
+    "mem_used_gb": float(mem_used_gb),
+    "mem_total_gb": float(mem_total_gb),
+    "mem_pct": int(mem_pct),
+    "kernel": kernel,
+}))
+PY
+    exit 0
+fi
+
+echo "LAN/Wi-Fi Interface : ${OUT_IFACE:-offline}${SSID:+ ($SSID)}"
+echo "Remote Web UI URL   : ${LAN_URL:-offline (use https://127.0.0.1:8006 locally)}"
+echo "Local Web UI URL    : ${LOCAL_URL}"
+echo "VM NAT Bridge       : vmbr1 (${VMBR1_IP:-missing})"
+echo "Services            : pveproxy=${PVEPROXY_STATE} pve-cluster=${PVE_CLUSTER_STATE} pve-wifi-nat=${PVE_WIFI_NAT_STATE}"
+echo "NAT Masquerade      : ${NAT_RULE} (ip_forward=${IP_FORWARD})"
+echo "Running Guests      : VMs=${VMS_RUNNING} CTs=${CTS_RUNNING}"
+echo "Host Resources      : Load=${LOAD_AVG} RAM=${MEM_USED_GB}/${MEM_TOTAL_GB} GiB (${MEM_PCT}%) Kernel=${KERNEL_VER}"

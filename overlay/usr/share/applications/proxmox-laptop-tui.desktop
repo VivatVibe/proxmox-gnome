@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Proxmox Laptop Assistant (TUI)
+Comment=View Proxmox Wi-Fi/LAN URL, service health, and reset VM NAT
+Exec=/usr/local/bin/pve-laptop-tui
+Icon=utilities-terminal
+Terminal=true
+Type=Application
+Categories=System;Monitor;
+StartupNotify=true

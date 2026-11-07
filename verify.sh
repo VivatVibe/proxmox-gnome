@@ -9,10 +9,17 @@ EXPECTED_REPO="deb http://download.proxmox.com/debian/pve trixie pve-no-subscrip
 OVERLAY_MANIFEST=(
     "644:etc/NetworkManager/conf.d/10-proxmox-unmanaged.conf"
     "755:etc/NetworkManager/dispatcher.d/99-pve-wifi-nat"
+    "644:etc/dconf/profile/user"
+    "644:etc/dconf/db/local.d/00-proxmox-laptop"
     "644:etc/systemd/logind.conf.d/10-pve-laptop.conf"
     "644:etc/systemd/system/pve-wifi-nat.service"
     "755:usr/local/bin/pve-wifi-nat.sh"
+    "755:usr/local/bin/pve-laptop-status"
+    "755:usr/local/bin/pve-laptop-tui"
     "644:usr/share/applications/proxmox-desktop.desktop"
+    "644:usr/share/applications/proxmox-laptop-tui.desktop"
+    "644:usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/metadata.json"
+    "644:usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/extension.js"
 )
 
 HOST_REQUIRED_PACKAGES=(
@@ -84,6 +91,12 @@ verify_host() {
 
     desktop-file-validate /usr/share/applications/proxmox-desktop.desktop || \
         fail "desktop-file-validate failed for /usr/share/applications/proxmox-desktop.desktop"
+    desktop-file-validate /usr/share/applications/proxmox-laptop-tui.desktop || \
+        fail "desktop-file-validate failed for /usr/share/applications/proxmox-laptop-tui.desktop"
+    /usr/local/bin/pve-laptop-status --json | python3 -c "import json,sys; d=json.load(sys.stdin); assert 'local_url' in d and 'pveproxy' in d" || \
+        fail "/usr/local/bin/pve-laptop-status --json did not return valid status JSON"
+    /usr/local/bin/pve-laptop-tui --once >/dev/null || \
+        fail "/usr/local/bin/pve-laptop-tui --once failed"
 
     local pkg pkg_status
     for pkg in "${HOST_REQUIRED_PACKAGES[@]}"; do
@@ -145,11 +158,20 @@ for script in \
     "${SCRIPT_DIR}/build-iso.sh" \
     "${SCRIPT_DIR}/setup-laptop.sh" \
     "${SCRIPT_DIR}/overlay/usr/local/bin/pve-wifi-nat.sh" \
+    "${SCRIPT_DIR}/overlay/usr/local/bin/pve-laptop-status" \
     "${SCRIPT_DIR}/overlay/etc/NetworkManager/dispatcher.d/99-pve-wifi-nat" \
     "${SCRIPT_DIR}/test-vm-boot.sh" \
     "${SCRIPT_DIR}/verify.sh"; do
     bash -n "$script" || fail "Syntax error in $script"
 done
+
+python3 -m py_compile "${SCRIPT_DIR}/overlay/usr/local/bin/pve-laptop-tui" || \
+    fail "Python syntax error in pve-laptop-tui"
+python3 -c "import json,sys; m=json.load(open(sys.argv[1])); assert m['uuid']=='proxmox-laptop@pve.local' and '48' in m['shell-version']" \
+    "${SCRIPT_DIR}/overlay/usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/metadata.json" || \
+    fail "Invalid GNOME extension metadata.json"
+grep -Fq "ProxmoxLaptopExtension" "${SCRIPT_DIR}/overlay/usr/share/gnome-shell/extensions/proxmox-laptop@pve.local/extension.js" || \
+    fail "Missing ProxmoxLaptopExtension class in extension.js"
 
 grep -Fq 'DISTRO="trixie"' "${SCRIPT_DIR}/build-iso.sh" || fail "build-iso.sh missing DISTRO=trixie"
 grep -Fq 'PVE_VERSION="9.2"' "${SCRIPT_DIR}/build-iso.sh" || fail "build-iso.sh missing PVE_VERSION=9.2"
@@ -282,6 +304,7 @@ if [[ "${1:-}" == "--runtime" ]]; then
             export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
             export INTERFACES_FILE='${RUNTIME_STAGE}/etc/network/interfaces'
             export LOCK_FILE='${RUNTIME_STAGE}/pve-wifi-nat.lock'
+            export STATE_FILE='${RUNTIME_STAGE}/pve-wifi-nat.state'
             ip link set lo up
             ip link add wlan0 type dummy
             ip addr add 192.0.2.1/24 dev wlan0

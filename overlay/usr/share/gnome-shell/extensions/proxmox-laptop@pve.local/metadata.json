@@ -1,0 +1,14 @@
+{
+  "uuid": "proxmox-laptop@pve.local",
+  "name": "Proxmox Laptop Assistant",
+  "description": "Displays the live Wi-Fi/LAN Proxmox VE URL on the top bar, monitors Proxmox services and vmbr1 NAT health, resets Wi-Fi NAT, and launches the Proxmox TUI.",
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "49"
+  ],
+  "url": "https://github.com/VivatVibe/proxmox-gnome",
+  "version": 1
+}

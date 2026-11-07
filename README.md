@@ -8,6 +8,8 @@ Build a bootable Debian 13 (Trixie) hybrid ISO and host installer that provision
 - **NetworkManager and `ifupdown2` isolation.** Marks `vmbr*`, `eth*`, and `en*` as unmanaged in `/etc/NetworkManager/conf.d/10-proxmox-unmanaged.conf` so GNOME manages Wi-Fi (`wl*`, `wlan*`, `wlo*`) while Proxmox owns bridge interfaces.
 - **Automatic Wi-Fi NAT bridge (`vmbr1`).** Creates `vmbr1` on `10.99.0.1/24` via `/usr/local/bin/pve-wifi-nat.sh` with `flock` serialization and idempotent `iptables` and `nftables` masquerade rules. Runs at boot via `pve-wifi-nat.service` before `pve-cluster.service` and whenever Wi-Fi connects or changes IP via `/etc/NetworkManager/dispatcher.d/99-pve-wifi-nat`.
 - **Laptop lid policy.** Sets `HandleLidSwitch=ignore` in `/etc/systemd/logind.conf.d/10-pve-laptop.conf` so guest VMs keep running when you close the laptop lid.
+- **GNOME Shell top bar extension (`proxmox-laptop@pve.local`).** Displays the live LAN/Wi-Fi Proxmox URL (`PVE <wifi-ip>:8006`) on the GNOME top bar, sends a desktop notification whenever switching Wi-Fi changes the host IP, monitors `pveproxy`, `pve-cluster`, and `pve-wifi-nat` health, copies the remote URL to the clipboard, resets Wi-Fi NAT (`vmbr1`), and launches the TUI assistant.
+- **Proxmox laptop TUI and status CLI.** Installs `/usr/local/bin/pve-laptop-tui` (`/usr/share/applications/proxmox-laptop-tui.desktop`) and `/usr/local/bin/pve-laptop-status` (`--json`) for live terminal monitoring and one-key service or NAT recovery.
 - **GNOME desktop launcher.** Installs `/usr/share/applications/proxmox-desktop.desktop` to open `https://127.0.0.1:8006`.
 
 ## Build the hybrid ISO
