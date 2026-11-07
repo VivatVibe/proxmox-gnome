@@ -64,3 +64,19 @@ To boot the built ISO in QEMU/KVM (`/dev/kvm`) and capture installer screenshots
 ```bash
 ./test-vm-boot.sh
 ```
+
+## Download the prebuilt ISO
+
+Prebuilt `proxmox-gnome-laptop-9.2-amd64.hybrid.iso` images and `SHA256SUMS` checksum files are published on the [GitHub Releases](https://github.com/VivatVibe/proxmox-gnome/releases) page.
+
+To verify a downloaded ISO against `SHA256SUMS`, run:
+
+```bash
+sha256sum -c SHA256SUMS
+```
+
+## License and trademark notice
+
+- **License.** The scripts, preseed configuration, and overlay files in this repository are licensed under the GNU Affero General Public License v3.0 (`AGPL-3.0-or-later`). See [`LICENSE`](LICENSE) for the full license text.
+- **Unofficial project disclaimer.** This project is an independent, unofficial community build script and installer overlay. It is not affiliated with, endorsed by, or supported by Proxmox Server Solutions GmbH or Software in the Public Interest, Inc. (Debian). "Proxmox" and "Proxmox VE" are registered trademarks of Proxmox Server Solutions GmbH in the EU, the US, and other regions. "Debian" is a registered trademark of Software in the Public Interest, Inc.
+- **Upstream source code (GPL/AGPL compliance).** The hybrid ISO repacks unmodified binary packages from official Debian 13 (Trixie) netinst media alongside the scripts in this repository. Complete corresponding source code for all included Debian and Proxmox packages is available from the official upstream repositories at https://deb.debian.org/debian/, https://cdimage.debian.org/debian-cd/current/amd64/iso-cd/, and http://download.proxmox.com/debian/pve/ (or https://git.proxmox.com/).
