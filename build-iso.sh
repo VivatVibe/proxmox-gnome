@@ -103,8 +103,9 @@ d-i pkgsel/include string network-manager network-manager-gnome ifupdown2 iptabl
 d-i preseed/late_command string \\
     cp -r /cdrom/proxmox-laptop /target/root/proxmox-laptop && \\
     in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh && \\
-    printf '#!/bin/sh\nin-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root /\n' > /usr/lib/finish-install.d/60pve-laptop && \\
-    chmod 0755 /usr/lib/finish-install.d/60pve-laptop
+    if [ -f /usr/lib/finish-install.d/55netcfg-copy-config ]; then \\
+        printf '\nin-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root /\n' >> /usr/lib/finish-install.d/55netcfg-copy-config; \\
+    fi
 EOF
 
     cat <<'EOF' > "${target_dir}/isolinux/gtk.cfg"
