@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ISO_FILE="${SCRIPT_DIR}/proxmox-gnome-laptop-9.2-amd64.hybrid.iso"
-OUT_DIR="${1:-/home/mrnv/.gemini/antigravity/brain/668468e5-5d1f-448b-bc32-61dd139ce159}"
+OUT_DIR="${1:-${SCRIPT_DIR}}"
 mkdir -p "$OUT_DIR"
 
 if [[ ! -f "$ISO_FILE" ]]; then
@@ -11,16 +11,10 @@ if [[ ! -f "$ISO_FILE" ]]; then
     exit 1
 fi
 
-docker run --rm --device /dev/kvm \
-    -v "${ISO_FILE}:/iso/installer.iso:ro" \
-    -v "${OUT_DIR}:/out" \
-    debian:trixie-slim bash -c '
-set -euo pipefail
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq --no-install-recommends qemu-system-x86 python3 python3-pil >/dev/null
-
-python3 - << "PYEOF"
+run_qemu_harvest() {
+    local iso_path="$1"
+    local out_path="$2"
+    ISO_PATH="$iso_path" OUT_PATH="$out_path" python3 - << 'PYEOF'
 import json
 import os
 import socket
@@ -28,7 +22,9 @@ import subprocess
 import time
 from PIL import Image
 
-qmp_path = "/tmp/qmp.sock"
+iso_path = os.environ["ISO_PATH"]
+out_path = os.environ["OUT_PATH"]
+qmp_path = f"/tmp/qmp-{os.getpid()}.sock"
 if os.path.exists(qmp_path):
     os.remove(qmp_path)
 
@@ -38,7 +34,7 @@ qemu_cmd = [
     "-cpu", "host",
     "-m", "2048",
     "-smp", "2",
-    "-cdrom", "/iso/installer.iso",
+    "-cdrom", iso_path,
     "-boot", "d",
     "-vga", "std",
     "-display", "none",
@@ -99,35 +95,75 @@ qmp_cmd("qmp_capabilities")
 
 def capture(ppm_name, png_name):
     ppm_path = f"/tmp/{ppm_name}"
-    png_path = f"/out/{png_name}"
+    png_path = os.path.join(out_path, png_name)
     qmp_cmd("screendump", {"filename": ppm_path})
     time.sleep(0.3)
     im = Image.open(ppm_path)
     im.save(png_path)
+    if os.path.exists(ppm_path):
+        os.remove(ppm_path)
     print(f"Captured {png_path} ({im.size[0]}x{im.size[1]})")
 
-time.sleep(4.0)
-capture("boot_menu.ppm", "vm_boot_menu.png")
+try:
+    time.sleep(4.0)
+    capture("boot_menu.ppm", "vm_boot_menu.png")
 
-send_keys(["ret"])
+    send_keys(["ret"])
 
-time.sleep(16.0)
-capture("installer_gui.ppm", "vm_installer_loaded.png")
+    time.sleep(16.0)
+    capture("installer_gui.ppm", "vm_installer_loaded.png")
 
-send_keys(["ctrl", "alt", "f2"], 200)
-time.sleep(2.0)
-send_keys(["ret"], 100)
-time.sleep(1.0)
-type_line("mkdir -p /cdrom")
-type_line("mount -t iso9660 -o ro /dev/sr0 /cdrom")
-type_line("uname -a")
-type_line("cat /proc/cmdline")
-type_line("cat /cdrom/preseed.cfg")
-type_line("ls -la /cdrom/proxmox-laptop")
-time.sleep(1.5)
-capture("installer_vt2.ppm", "vm_installer_preseed.png")
-
-qmp_cmd("quit")
-proc.wait(timeout=5)
+    send_keys(["ctrl", "alt", "f2"], 200)
+    time.sleep(2.0)
+    send_keys(["ret"], 100)
+    time.sleep(1.0)
+    type_line("mkdir -p /cdrom")
+    type_line("mount -t iso9660 -o ro /dev/sr0 /cdrom")
+    type_line("uname -a")
+    type_line("cat /proc/cmdline")
+    type_line("cat /cdrom/preseed.cfg")
+    type_line("ls -la /cdrom/proxmox-laptop")
+    time.sleep(1.5)
+    capture("installer_vt2.ppm", "vm_installer_preseed.png")
+finally:
+    try:
+        qmp_cmd("quit")
+    except Exception:
+        pass
+    proc.wait(timeout=5)
+    if os.path.exists(qmp_path):
+        os.remove(qmp_path)
 PYEOF
-'
+}
+
+if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+    if ! python3 -c "import PIL" >/dev/null 2>&1; then
+        if [[ "$EUID" -eq 0 ]]; then
+            apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil >/dev/null
+        elif sudo -n true 2>/dev/null; then
+            sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil >/dev/null
+        fi
+    fi
+    if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+        run_qemu_harvest "$ISO_FILE" "$OUT_DIR"
+    elif sudo -n true 2>/dev/null; then
+        sudo bash -c "$(declare -f run_qemu_harvest); run_qemu_harvest '$ISO_FILE' '$OUT_DIR'"
+        sudo chown -f "$(id -u):$(id -g)" "${OUT_DIR}/vm_boot_menu.png" "${OUT_DIR}/vm_installer_loaded.png" "${OUT_DIR}/vm_installer_preseed.png" 2>/dev/null || true
+    else
+        echo "Error: /dev/kvm requires root or kvm group access." >&2
+        exit 1
+    fi
+    exit 0
+fi
+
+docker run --rm --device /dev/kvm \
+    -v "${ISO_FILE}:/iso/installer.iso:ro" \
+    -v "${OUT_DIR}:/out" \
+    debian:trixie-slim bash -c "
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends qemu-system-x86 python3 python3-pil >/dev/null
+$(declare -f run_qemu_harvest)
+run_qemu_harvest /iso/installer.iso /out
+"

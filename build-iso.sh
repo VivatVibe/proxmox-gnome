@@ -186,6 +186,14 @@ if [[ "$BUILD_MODE" == "installer" ]]; then
 
     rm -f "$OUT_ISO"
 
+    if ! command -v xorriso >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+        if [[ "$EUID" -eq 0 ]]; then
+            apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso >/dev/null
+        elif sudo -n true 2>/dev/null; then
+            sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso >/dev/null
+        fi
+    fi
+
     if command -v xorriso >/dev/null 2>&1; then
         xorriso \
             -indev "$BASE_ISO" \
