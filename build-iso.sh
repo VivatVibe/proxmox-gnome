@@ -102,7 +102,9 @@ tasksel tasksel/first multiselect standard, gnome-desktop, laptop
 d-i pkgsel/include string network-manager network-manager-gnome ifupdown2 iptables nftables dnsmasq-base xdg-utils wget ca-certificates gnupg
 d-i preseed/late_command string \\
     cp -r /cdrom/proxmox-laptop /target/root/proxmox-laptop && \\
-    in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh
+    in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh && \\
+    printf '#!/bin/sh\nin-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root /\n' > /usr/lib/finish-install.d/60pve-laptop && \\
+    chmod 0755 /usr/lib/finish-install.d/60pve-laptop
 EOF
 
     cat <<'EOF' > "${target_dir}/isolinux/gtk.cfg"

@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISTRO="trixie"
 PVE_VERSION="9.2"
 PVE_REPO="deb http://download.proxmox.com/debian/pve ${DISTRO} pve-no-subscription"
 DRY_RUN=0
+RECONCILE_ONLY=0
 TARGET_ROOT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dry-run)
             DRY_RUN=1
+            shift
+            ;;
+        --reconcile)
+            RECONCILE_ONLY=1
             shift
             ;;
         --target-root)
@@ -33,6 +40,31 @@ OVERLAY_MANIFEST=(
     "0755:usr/local/bin/pve-wifi-nat.sh"
     "0644:usr/share/applications/proxmox-desktop.desktop"
 )
+
+LAPTOP_PACKAGES=(
+    proxmox-default-kernel
+    proxmox-ve
+    ifupdown2
+    gnome-core
+    gdm3
+    network-manager
+    network-manager-gnome
+    iptables
+    nftables
+    dnsmasq-base
+    xdg-utils
+)
+
+all_laptop_packages_installed() {
+    local pkg status
+    for pkg in "${LAPTOP_PACKAGES[@]}"; do
+        status="$(dpkg-query -W -f='${db:Status-Status}' "$pkg" 2>/dev/null || true)"
+        if [[ "$status" != "installed" ]]; then
+            return 1
+        fi
+    done
+    return 0
+}
 
 configure_pve_hosts_and_apt() {
     local root_dir="$1"
@@ -141,26 +173,24 @@ HOST_NAME="$(hostname)"
 echo "postfix postfix/main_mailer_type select Local only" | debconf-set-selections || true
 echo "postfix postfix/mailname string ${HOST_NAME}.pve.laptop.local" | debconf-set-selections || true
 
-/usr/local/bin/pve-wifi-nat.sh || true
+/usr/local/bin/pve-wifi-nat.sh
 
-apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    proxmox-default-kernel \
-    proxmox-ve \
-    ifupdown2 \
-    gnome-core \
-    gdm3 \
-    network-manager \
-    network-manager-gnome \
-    iptables \
-    nftables \
-    dnsmasq-base \
-    xdg-utils
+if [[ "$RECONCILE_ONLY" == "0" ]] && ! all_laptop_packages_installed; then
+    apt-get update -y
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${LAPTOP_PACKAGES[@]}"
+fi
 
 systemctl daemon-reload
 systemctl enable --now pve-wifi-nat.service || systemctl enable pve-wifi-nat.service || true
-systemctl restart pve-cluster pvedaemon pveproxy || true
-systemctl restart systemd-logind || true
-systemctl restart NetworkManager || true
+for pve_svc in pve-cluster pvedaemon pveproxy; do
+    if ! systemctl is-active --quiet "$pve_svc"; then
+        systemctl restart "$pve_svc" || true
+    fi
+done
+if ! systemctl is-active --quiet NetworkManager; then
+    systemctl restart NetworkManager || true
+else
+    nmcli general reload 2>/dev/null || true
+fi
 
 echo "Proxmox VE ${PVE_VERSION} laptop profile is active."
