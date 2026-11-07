@@ -215,46 +215,96 @@ if [[ "${1:-}" == "--host" || "${1:-}" == "--live" ]]; then
 fi
 
 if [[ "${1:-}" == "--runtime" ]]; then
-    docker run --rm --privileged -v "${SCRIPT_DIR}:/repo:ro" debian:trixie-slim bash -c '
-        set -euo pipefail
-        export DEBIAN_FRONTEND=noninteractive
-        apt-get update -qq
-        apt-get install -y -qq --no-install-recommends \
-            wget ca-certificates gnupg desktop-file-utils iproute2 iputils-ping procps iptables nftables >/dev/null
-        echo "deb cdrom:[Debian GNU/Linux 13.7.0 _Trixie_ - Official amd64 NETINST]/ trixie main" >> /etc/apt/sources.list
-        echo "debian" > /etc/hostname
-        printf "127.0.0.1\tlocalhost\n127.0.1.1\tdebian.pve.laptop.local\tdebian\n" > /etc/hosts
-        /repo/setup-laptop.sh --target-root /
-        ! grep -q "^deb cdrom:" /etc/apt/sources.list
-        grep -Fq "10.99.0.1" /etc/hosts
-        grep -Fq "iface vmbr1 inet static" /etc/network/interfaces
-        test -x /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat
-        desktop-file-validate /usr/share/applications/proxmox-desktop.desktop
-        apt-get update -qq
-        apt-get install -s --no-install-recommends \
-            proxmox-default-kernel proxmox-ve ifupdown2 gnome-core gdm3 \
-            network-manager network-manager-gnome iptables nftables dnsmasq-base xdg-utils \
-            | grep -Fq "Inst proxmox-ve (9.2"
-        /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat vmbr1 up
-        /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat wlan0 up
-        /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat wlan0 dhcp4-change
-        ip -4 addr show dev vmbr1 | grep -Fq "10.99.0.1/24"
-        iptables -t nat -S POSTROUTING | grep -Fq "10.99.0.0/24"
-        ip netns add guestvm
-        ip link add veth-host type veth peer name veth-guest
-        ip link set veth-host master vmbr1
-        ip link set veth-host up
-        ip link set veth-guest netns guestvm
-        ip netns exec guestvm ip addr add 10.99.0.2/24 dev veth-guest
-        ip netns exec guestvm ip link set lo up
-        ip netns exec guestvm ip link set veth-guest up
-        ip netns exec guestvm ip route add default via 10.99.0.1
-        ip netns exec guestvm ping -c 2 -W 3 10.99.0.1 >/dev/null
-        HOST_IP=$(ip -4 addr show dev eth0 | awk "/inet / {split(\$2, a, \"/\"); print a[1]; exit}")
-        if [[ -n "$HOST_IP" ]]; then
-            ip netns exec guestvm ping -c 2 -W 3 "$HOST_IP" >/dev/null
+    if command -v docker >/dev/null 2>&1; then
+        docker run --rm --privileged -v "${SCRIPT_DIR}:/repo:ro" debian:trixie-slim bash -c '
+            set -euo pipefail
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+                wget ca-certificates gnupg desktop-file-utils iproute2 iputils-ping procps iptables nftables >/dev/null
+            echo "deb cdrom:[Debian GNU/Linux 13.7.0 _Trixie_ - Official amd64 NETINST]/ trixie main" >> /etc/apt/sources.list
+            echo "debian" > /etc/hostname
+            printf "127.0.0.1\tlocalhost\n127.0.1.1\tdebian.pve.laptop.local\tdebian\n" > /etc/hosts
+            /repo/setup-laptop.sh --target-root /
+            ! grep -q "^deb cdrom:" /etc/apt/sources.list
+            grep -Fq "10.99.0.1" /etc/hosts
+            grep -Fq "iface vmbr1 inet static" /etc/network/interfaces
+            test -x /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat
+            desktop-file-validate /usr/share/applications/proxmox-desktop.desktop
+            apt-get update -qq
+            apt-get install -s --no-install-recommends \
+                proxmox-default-kernel proxmox-ve ifupdown2 gnome-core gdm3 \
+                network-manager network-manager-gnome iptables nftables dnsmasq-base xdg-utils \
+                | grep -Fq "Inst proxmox-ve (9.2"
+            /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat vmbr1 up
+            /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat wlan0 up
+            /etc/NetworkManager/dispatcher.d/99-pve-wifi-nat wlan0 dhcp4-change
+            ip -4 addr show dev vmbr1 | grep -Fq "10.99.0.1/24"
+            iptables -t nat -S POSTROUTING | grep -Fq "10.99.0.0/24"
+            ip netns add guestvm
+            ip link add veth-host type veth peer name veth-guest
+            ip link set veth-host master vmbr1
+            ip link set veth-host up
+            ip link set veth-guest netns guestvm
+            ip netns exec guestvm ip addr add 10.99.0.2/24 dev veth-guest
+            ip netns exec guestvm ip link set lo up
+            ip netns exec guestvm ip link set veth-guest up
+            ip netns exec guestvm ip route add default via 10.99.0.1
+            ip netns exec guestvm ping -c 2 -W 3 10.99.0.1 >/dev/null
+            HOST_IP=$(ip -4 addr show dev eth0 | awk "/inet / {split(\$2, a, \"/\"); print a[1]; exit}")
+            if [[ -n "$HOST_IP" ]]; then
+                ip netns exec guestvm ping -c 2 -W 3 "$HOST_IP" >/dev/null
+            fi
+        ' || fail "Debian 13 runtime container verification failed"
+    else
+        RUN_PRIV=()
+        if [[ "$EUID" -ne 0 ]]; then
+            if sudo -n true 2>/dev/null; then
+                RUN_PRIV=(sudo)
+            else
+                fail "Root privileges or docker required for --runtime verification"
+            fi
         fi
-    ' || fail "Debian 13 runtime container verification failed"
+        RUNTIME_STAGE="$(mktemp -d)"
+        mkdir -p "${RUNTIME_STAGE}/etc/apt"
+        echo "deb cdrom:[Debian GNU/Linux 13.7.0 _Trixie_ - Official amd64 NETINST]/ trixie main" > "${RUNTIME_STAGE}/etc/apt/sources.list"
+        echo "debian" > "${RUNTIME_STAGE}/etc/hostname"
+        printf "127.0.0.1\tlocalhost\n127.0.1.1\tdebian.pve.laptop.local\tdebian\n" > "${RUNTIME_STAGE}/etc/hosts"
+        "${RUN_PRIV[@]}" "${SCRIPT_DIR}/setup-laptop.sh" --target-root "$RUNTIME_STAGE"
+        ! grep -q "^deb cdrom:" "${RUNTIME_STAGE}/etc/apt/sources.list" || fail "Runtime stage deb cdrom not commented"
+        grep -Fq "10.99.0.1" "${RUNTIME_STAGE}/etc/hosts" || fail "Runtime stage 10.99.0.1 missing in hosts"
+        grep -Fq "iface vmbr1 inet static" "${RUNTIME_STAGE}/etc/network/interfaces" || fail "Runtime stage vmbr1 missing in interfaces"
+        test -x "${RUNTIME_STAGE}/etc/NetworkManager/dispatcher.d/99-pve-wifi-nat" || fail "Runtime stage 99-pve-wifi-nat not executable"
+        desktop-file-validate "${RUNTIME_STAGE}/usr/share/applications/proxmox-desktop.desktop" || fail "Runtime stage desktop-file-validate failed"
+        [[ "$(dpkg-query -W -f='${Version}' proxmox-ve 2>/dev/null || apt-cache policy proxmox-ve)" == *9.2* ]] || fail "proxmox-ve 9.2 not available in apt cache"
+        "${RUN_PRIV[@]}" unshare --net bash -c "
+            set -euo pipefail
+            export PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+            export INTERFACES_FILE='${RUNTIME_STAGE}/etc/network/interfaces'
+            export LOCK_FILE='${RUNTIME_STAGE}/pve-wifi-nat.lock'
+            ip link set lo up
+            ip link add wlan0 type dummy
+            ip addr add 192.0.2.1/24 dev wlan0
+            ip link set wlan0 up
+            ip route add default dev wlan0
+            '${RUNTIME_STAGE}/usr/local/bin/pve-wifi-nat.sh'
+            ip -4 addr show dev vmbr1 | grep -Fq '10.99.0.1/24'
+            iptables -w 5 -t nat -S POSTROUTING | grep -Fq '10.99.0.0/24 -o wlan0 -j MASQUERADE'
+            ip netns add guestvm-rt
+            trap 'ip netns del guestvm-rt 2>/dev/null || true' EXIT
+            ip link add veth-host type veth peer name veth-guest
+            ip link set veth-host master vmbr1
+            ip link set veth-host up
+            ip link set veth-guest netns guestvm-rt
+            ip netns exec guestvm-rt ip addr add 10.99.0.2/24 dev veth-guest
+            ip netns exec guestvm-rt ip link set lo up
+            ip netns exec guestvm-rt ip link set veth-guest up
+            ip netns exec guestvm-rt ip route add default via 10.99.0.1
+            ip netns exec guestvm-rt ping -c 2 -W 3 10.99.0.1 >/dev/null
+            ip netns exec guestvm-rt ping -c 2 -W 3 192.0.2.1 >/dev/null
+        " || { "${RUN_PRIV[@]}" rm -rf "$RUNTIME_STAGE"; fail "Isolated netns runtime verification failed"; }
+        "${RUN_PRIV[@]}" rm -rf "$RUNTIME_STAGE"
+    fi
 fi
 
 echo "PASS: All syntax, repository, overlay, dry-run, and runtime checks succeeded."

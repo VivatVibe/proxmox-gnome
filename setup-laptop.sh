@@ -107,7 +107,7 @@ auto lo
 iface lo inet loopback
 EOF
     fi
-    if ! grep -q "iface vmbr1" "$interfaces_file" 2>/dev/null; then
+    if ! grep -Eq '^[[:space:]]*iface[[:space:]]+vmbr1([[:space:]]|$)' "$interfaces_file" 2>/dev/null; then
         cat <<'EOF' >> "$interfaces_file"
 
 auto vmbr1
@@ -173,7 +173,7 @@ HOST_NAME="$(hostname)"
 echo "postfix postfix/main_mailer_type select Local only" | debconf-set-selections || true
 echo "postfix postfix/mailname string ${HOST_NAME}.pve.laptop.local" | debconf-set-selections || true
 
-/usr/local/bin/pve-wifi-nat.sh
+/usr/local/bin/pve-wifi-nat.sh || true
 
 if [[ "$RECONCILE_ONLY" == "0" ]] && ! all_laptop_packages_installed; then
     apt-get update -y

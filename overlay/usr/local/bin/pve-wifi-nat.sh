@@ -23,7 +23,7 @@ run_cmd() {
 }
 
 if [[ "$DRY_RUN" == "1" ]]; then
-    OUT_IFACE=$(ip route show default 2>/dev/null | awk '{print $5}' | head -n1 || true)
+    OUT_IFACE=$(ip route show default 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)
     OUT_IFACE="${OUT_IFACE:-wlan0}"
     run_cmd sysctl -w net.ipv4.ip_forward=1
     run_cmd ip link add name "$VMBR" type bridge
@@ -39,7 +39,7 @@ if command -v flock >/dev/null 2>&1; then
     flock -w 15 9
 fi
 
-if [[ -f "$INTERFACES_FILE" && -w "$INTERFACES_FILE" ]] && ! grep -q "iface ${VMBR}" "$INTERFACES_FILE" 2>/dev/null; then
+if [[ -f "$INTERFACES_FILE" && -w "$INTERFACES_FILE" ]] && ! grep -Eq "^[[:space:]]*iface[[:space:]]+${VMBR}([[:space:]]|\$)" "$INTERFACES_FILE" 2>/dev/null; then
     cat <<EOF >> "$INTERFACES_FILE"
 
 auto ${VMBR}
@@ -65,7 +65,7 @@ ip -4 addr show dev "$VMBR" | grep -Fq "$BRIDGE_IP"
 
 ip link set dev "$VMBR" up
 
-OUT_IFACE=$(ip route show default | awk '{print $5}' | head -n1 || true)
+OUT_IFACE=$(ip route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}' || true)
 
 if [[ -n "$OUT_IFACE" ]] && [[ "$OUT_IFACE" != "$VMBR" ]]; then
     if command -v iptables >/dev/null 2>&1; then

@@ -104,7 +104,7 @@ d-i preseed/late_command string \\
     cp -r /cdrom/proxmox-laptop /target/root/proxmox-laptop && \\
     in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh && \\
     if [ -f /usr/lib/finish-install.d/55netcfg-copy-config ]; then \\
-        printf '\nin-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root /\n' >> /usr/lib/finish-install.d/55netcfg-copy-config; \\
+        sed -i '2i trap "in-target /bin/bash /root/proxmox-laptop/setup-laptop.sh --target-root /" EXIT' /usr/lib/finish-install.d/55netcfg-copy-config; \\
     fi
 EOF
 
