@@ -1,3 +1,6 @@
 *.iso
 build/
 .audit/
+
+__pycache__/
+*.py[cod]
